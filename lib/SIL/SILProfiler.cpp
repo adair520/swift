@@ -13,6 +13,9 @@
 #include "swift/SIL/SILProfiler.h"
 #include "swift/AST/ASTWalker.h"
 #include "swift/AST/Decl.h"
+#include "swift/AST/Expr.h"
+#include "swift/AST/Module.h"
+#include "swift/AST/Stmt.h"
 #include "swift/Parse/Lexer.h"
 #include "swift/SIL/FormalLinkage.h"
 #include "swift/SIL/SILModule.h"
@@ -93,11 +96,8 @@ static bool canCreateProfilerForAST(ASTNode N) {
   assert(hasASTBeenTypeChecked(N) && "Cannot use this AST for profiling");
 
   if (auto *D = N.dyn_cast<Decl *>()) {
-    // Any mapped function may be profiled. There's an exception for
-    // constructors because all of the constructors for a type share a single
-    // profiler.
     if (auto *AFD = dyn_cast<AbstractFunctionDecl>(D))
-      return !isa<ConstructorDecl>(AFD);
+      return true;
 
     if (isa<TopLevelCodeDecl>(D))
       return true;
@@ -157,6 +157,33 @@ std::pair<bool, Expr *> visitClosureExpr(ASTWalker &Walker,
   return {true, CE};
 }
 
+/// Special logic for handling function visitation.
+///
+/// To avoid creating duplicate mappings, a function decl is only profiled if
+/// it hasn't been reached via recursive walk, or if it's a constructor for a
+/// nominal type (these are profiled in a group).
+///
+/// Apply \p Func is the function can be visited.
+template <typename F>
+bool visitFunctionDecl(ASTWalker &Walker, AbstractFunctionDecl *AFD, F Func) {
+  bool continueWalk = Walker.Parent.isNull() || isa<ConstructorDecl>(AFD);
+  if (continueWalk)
+    Func();
+  return continueWalk;
+}
+
+/// Special logic for handling nominal type visitation.
+///
+/// Apply \p Func if the nominal type can be visited (i.e it has not been
+/// reached via recursive walk).
+template <typename F>
+bool visitNominalTypeDecl(ASTWalker &Walker, NominalTypeDecl *NTD, F Func) {
+  bool continueWalk = Walker.Parent.isNull();
+  if (continueWalk)
+    Func();
+  return continueWalk;
+}
+
 /// An ASTWalker that maps ASTNodes to profiling counters.
 struct MapRegionCounters : public ASTWalker {
   /// The next counter value to assign.
@@ -176,18 +203,13 @@ struct MapRegionCounters : public ASTWalker {
       return false;
 
     if (auto *AFD = dyn_cast<AbstractFunctionDecl>(D)) {
-      // Don't map a nested function unless it's a constructor.
-      bool continueWalk = Parent.isNull() || isa<ConstructorDecl>(AFD);
-      if (continueWalk)
-        CounterMap[AFD->getBody()] = NextCounter++;
-      return continueWalk;
+      return visitFunctionDecl(
+          *this, AFD, [&] { CounterMap[AFD->getBody()] = NextCounter++; });
     } else if (auto *TLCD = dyn_cast<TopLevelCodeDecl>(D)) {
       CounterMap[TLCD->getBody()] = NextCounter++;
-    } else if (isa<NominalTypeDecl>(D)) {
-      bool continueWalk = Parent.isNull();
-      if (continueWalk)
-        WithinNominalType = true;
-      return continueWalk;
+    } else if (auto *NTD = dyn_cast<NominalTypeDecl>(D)) {
+      return visitNominalTypeDecl(*this, NTD,
+                                  [&] { WithinNominalType = true; });
     }
     return true;
   }
@@ -411,16 +433,21 @@ struct PGOMapping : public ASTWalker {
     if (isUnmapped(D))
       return false;
     if (auto *AFD = dyn_cast<AbstractFunctionDecl>(D)) {
-      auto node = AFD->getBody();
-      CounterMap[node] = NextCounter++;
-      auto count = loadExecutionCount(node);
-      LoadedCounterMap[node] = count;
+      return visitFunctionDecl(*this, AFD, [&] {
+        auto node = AFD->getBody();
+        CounterMap[node] = NextCounter++;
+        auto count = loadExecutionCount(node);
+        LoadedCounterMap[node] = count;
+      });
     }
     if (auto *TLCD = dyn_cast<TopLevelCodeDecl>(D)) {
       auto node = TLCD->getBody();
       CounterMap[node] = NextCounter++;
       auto count = loadExecutionCount(node);
       LoadedCounterMap[node] = count;
+    }
+    if (auto *NTD = dyn_cast<NominalTypeDecl>(D)) {
+      return visitNominalTypeDecl(*this, NTD, [&] {});
     }
     return true;
   }
@@ -768,26 +795,21 @@ public:
       return false;
 
     if (auto *AFD = dyn_cast<AbstractFunctionDecl>(D)) {
-      // Don't map a nested function unless it's a constructor.
-      bool continueWalk = Parent.isNull() || isa<ConstructorDecl>(AFD);
-      if (continueWalk) {
+      return visitFunctionDecl(*this, AFD, [&] {
         CounterExpr &funcCounter = assignCounter(AFD->getBody());
 
-        if (isa<ConstructorDecl>(AFD))
+        if (ParentNominalType && isa<ConstructorDecl>(AFD))
           addToCounter(ParentNominalType, funcCounter);
-      }
-      return continueWalk;
+      });
     } else if (auto *TLCD = dyn_cast<TopLevelCodeDecl>(D)) {
       assignCounter(TLCD->getBody());
       ImplicitTopLevelBody = TLCD->getBody();
     } else if (auto *NTD = dyn_cast<NominalTypeDecl>(D)) {
-      bool continueWalk = Parent.isNull();
-      if (continueWalk) {
+      return visitNominalTypeDecl(*this, NTD, [&] {
         ParentNominalType = NTD;
         assignCounter(NTD, CounterExpr::Zero());
         pushRegion(NTD);
-      }
-      return continueWalk;
+      });
     }
     return true;
   }
@@ -973,16 +995,6 @@ static StringRef getCurrentFileName(ASTNode Root) {
   return {};
 }
 
-static void walkTopLevelNodeForProfiling(ASTNode Root, ASTWalker &Walker) {
-  Root.walk(Walker);
-
-  // Visit extensions when walking through a nominal type.
-  auto *NTD = dyn_cast_or_null<NominalTypeDecl>(Root.dyn_cast<Decl *>());
-  if (NTD)
-    for (ExtensionDecl *ED : NTD->getExtensions())
-      ED->walk(Walker);
-}
-
 void SILProfiler::assignRegionCounters() {
   const auto &SM = M.getASTContext().SourceMgr;
 
@@ -1018,7 +1030,7 @@ void SILProfiler::assignRegionCounters() {
       CurrentFuncName, getEquivalentPGOLinkage(CurrentFuncLinkage),
       CurrentFileName);
 
-  walkTopLevelNodeForProfiling(Root, Mapper);
+  Root.walk(Mapper);
 
   NumRegionCounters = Mapper.NextCounter;
   // TODO: Mapper needs to calculate a function hash as it goes.
@@ -1026,7 +1038,7 @@ void SILProfiler::assignRegionCounters() {
 
   if (EmitCoverageMapping) {
     CoverageMapping Coverage(SM);
-    walkTopLevelNodeForProfiling(Root, Coverage);
+    Root.walk(Coverage);
     CovMap =
         Coverage.emitSourceRegions(M, CurrentFuncName, PGOFuncName, PGOFuncHash,
                                    RegionCounterMap, CurrentFileName);
@@ -1044,7 +1056,7 @@ void SILProfiler::assignRegionCounters() {
     }
     PGOMapping pgoMapper(RegionLoadedCounterMap, LoadedCounts,
                          RegionCondToParentMap);
-    walkTopLevelNodeForProfiling(Root, pgoMapper);
+    Root.walk(pgoMapper);
   }
 }
 
@@ -1068,11 +1080,4 @@ Optional<ASTNode> SILProfiler::getPGOParent(ASTNode Node) {
     return None;
   }
   return it->getSecond();
-}
-
-void SILProfiler::recordCounterUpdate() {
-  // If a counter update is recorded, the profile symbol table is guaranteed
-  // to have name data needed by the coverage mapping.
-  if (CovMap)
-    CovMap->setSymtabEntryGuaranteed();
 }

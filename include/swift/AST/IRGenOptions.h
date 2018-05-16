@@ -106,8 +106,8 @@ public:
   /// \brief Whether we should run LLVM optimizations after IRGen.
   unsigned DisableLLVMOptzns : 1;
 
-  /// \brief Whether we should run LLVM ARC optimizations after IRGen.
-  unsigned DisableLLVMARCOpts : 1;
+  /// Whether we should run swift specific LLVM optimizations after IRGen.
+  unsigned DisableSwiftSpecificLLVMOptzns : 1;
 
   /// \brief Whether we should run LLVM SLP vectorizer.
   unsigned DisableLLVMSLPVectorizer : 1;
@@ -152,6 +152,9 @@ public:
   /// Enables resilient class layout.
   unsigned EnableClassResilience : 1;
 
+  /// Bypass resilience when accessing resilient frameworks.
+  unsigned EnableResilienceBypass : 1;
+
   /// Should we try to build incrementally by not emitting an object file if it
   /// has the same IR hash as the module that we are preparing to emit?
   ///
@@ -179,14 +182,14 @@ public:
         Verify(true), OptMode(OptimizationMode::NotSet),
         Sanitizers(OptionSet<SanitizerKind>()),
         DebugInfoKind(IRGenDebugInfoKind::None), UseJIT(false),
-        DisableLLVMOptzns(false), DisableLLVMARCOpts(false),
+        DisableLLVMOptzns(false), DisableSwiftSpecificLLVMOptzns(false),
         DisableLLVMSLPVectorizer(false), DisableFPElim(true), Playground(false),
         EmitStackPromotionChecks(false), PrintInlineTree(false),
         EmbedMode(IRGenEmbedMode::None), HasValueNamesSetting(false),
         ValueNames(false), EnableReflectionMetadata(true),
         EnableReflectionNames(true), EnableClassResilience(false),
-        UseIncrementalLLVMCodeGen(true), UseSwiftCall(false),
-        GenerateProfile(false), CmdArgs(),
+        EnableResilienceBypass(false), UseIncrementalLLVMCodeGen(true),
+        UseSwiftCall(false), GenerateProfile(false), CmdArgs(),
         SanitizeCoverage(llvm::SanitizerCoverageOptions()) {}
 
   // Get a hash of all options which influence the llvm compilation but are not
@@ -194,7 +197,7 @@ public:
   unsigned getLLVMCodeGenOptionsHash() {
     unsigned Hash = (unsigned)OptMode;
     Hash = (Hash << 1) | DisableLLVMOptzns;
-    Hash = (Hash << 1) | DisableLLVMARCOpts;
+    Hash = (Hash << 1) | DisableSwiftSpecificLLVMOptzns;
     return Hash;
   }
 

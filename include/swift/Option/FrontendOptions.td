@@ -81,6 +81,9 @@ def verify_generic_signatures : Separate<["-"], "verify-generic-signatures">,
   MetaVarName<"<module-name>">,
   HelpText<"Verify the generic signatures in the given module">;
 
+def verify_syntax_tree : Flag<["-"], "verify-syntax-tree">,
+  HelpText<"Verify that no unknown nodes exist in the libSyntax tree">;
+
 def show_diagnostics_after_fatal : Flag<["-"], "show-diagnostics-after-fatal">,
   HelpText<"Keep emitting subsequent diagnostics after a fatal error">;
 
@@ -214,8 +217,8 @@ def disable_llvm_optzns : Flag<["-"], "disable-llvm-optzns">,
 def disable_sil_perf_optzns : Flag<["-"], "disable-sil-perf-optzns">,
   HelpText<"Don't run SIL performance optimization passes">;
 
-def disable_llvm_arc_opts : Flag<["-"], "disable-llvm-arc-opts">,
-  HelpText<"Don't run LLVM ARC optimization passes.">;
+def disable_swift_specific_llvm_optzns : Flag<["-"], "disable-swift-specific-llvm-optzns">,
+  HelpText<"Don't run Swift specific LLVM optimization passes.">;
 
 def disable_llvm_slp_vectorizer : Flag<["-"], "disable-llvm-slp-vectorizer">,
   HelpText<"Don't run LLVM SLP vectorizer">;
@@ -342,6 +345,9 @@ def warn_long_expression_type_checking_EQ : Joined<["-"], "warn-long-expression-
 
 def solver_expression_time_threshold_EQ : Joined<["-"], "solver-expression-time-threshold=">;
 
+def switch_checking_invocation_threshold_EQ : Joined<["-"],
+    "switch-checking-invocation-threshold=">;
+
 def enable_source_import : Flag<["-"], "enable-source-import">,
   HelpText<"Enable importing of Swift source files">;
 
@@ -449,6 +455,9 @@ def enable_resilience : Flag<["-"], "enable-resilience">,
 
 def enable_class_resilience : Flag<["-"], "enable-class-resilience">,
    HelpText<"Enable resilient layout for classes containing resilient value types">;
+
+def enable_resilience_bypass : Flag<["-"], "enable-resilience-bypass">,
+   HelpText<"Completely bypass resilience when accessing types in resilient frameworks">;
 
 def group_info_path : Separate<["-"], "group-info-path">,
   HelpText<"The path to collect the group information of the compiled module">;

@@ -12,10 +12,13 @@ func foo(_ c: Container) -> String {
   c.addingAttributes(["a": "b", "a": "b", "a": "b"])
   c.adding(attributes: ["a": 1, "a": 2, "a": 3])
   c.adding(optionalAttributes: ["a": 1, "a": 2, "a": 3])
+  _ = Container(optionalAttributes: [:])
+  _ = Container(optionalAttrArray: [])
   _ = Container(optionalAttributes: nil)
   _ = Container(optionalAttrArray: nil)
   c.adding(attrArray: ["key1", "key2"])
   c.add(single: "")
+  c.add(singleOptional: "")
   c.add(singleOptional: nil)
   _ = c.getAttrDictionary()
   _ = c.getOptionalAttrDictionary()
@@ -27,5 +30,15 @@ func foo(_ c: Container) -> String {
   c.addingAttributes(c.getAttrDictionary())
   c.adding(optionalAttributes: c.getAttrDictionary())
 
+  c.attrDict = ["a": "b", "a": "b", "a": "b"]
+  c.attrArr = ["key1", "key2"]
+  _ = c.attrArr
+  _ = c.attrDict
+  c.adding(attributes: c.attrDict)
+  _ = Container(optionalAttrArray: c.attrArr)
+  c.adding(optionalAttributes: c.optionalAttrDict)
+  _ = GlobalAttribute
+  c.Value = GlobalAttribute
+  c.optionalAttrDict = nil
   return c.Value
 }

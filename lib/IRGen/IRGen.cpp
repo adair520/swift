@@ -176,9 +176,12 @@ void swift::performLLVMOptimizations(IRGenOptions &Opts, llvm::Module *Module,
         llvm::createAlwaysInlinerLegacyPass(/*insertlifetime*/false);
   }
 
+  bool RunSwiftSpecificLLVMOptzns =
+      !Opts.DisableSwiftSpecificLLVMOptzns && !Opts.DisableLLVMOptzns;
+
   // If the optimizer is enabled, we run the ARCOpt pass in the scalar optimizer
   // and the Contract pass as late as possible.
-  if (!Opts.DisableLLVMARCOpts) {
+  if (RunSwiftSpecificLLVMOptzns) {
     PMBuilder.addExtension(PassManagerBuilder::EP_ScalarOptimizerLate,
                            addSwiftARCOptPass);
     PMBuilder.addExtension(PassManagerBuilder::EP_OptimizerLast,
@@ -208,11 +211,12 @@ void swift::performLLVMOptimizations(IRGenOptions &Opts, llvm::Module *Module,
                            addSanitizerCoveragePass);
   }
 
-  if (!Opts.DisableLLVMOptzns)
+  if (RunSwiftSpecificLLVMOptzns)
     addCoroutinePassesToExtensionPoints(PMBuilder);
 
-  PMBuilder.addExtension(PassManagerBuilder::EP_OptimizerLast,
-                         addSwiftMergeFunctionsPass);
+  if (RunSwiftSpecificLLVMOptzns)
+    PMBuilder.addExtension(PassManagerBuilder::EP_OptimizerLast,
+                           addSwiftMergeFunctionsPass);
 
   // Configure the function passes.
   legacy::FunctionPassManager FunctionPasses(Module);
@@ -224,7 +228,7 @@ void swift::performLLVMOptimizations(IRGenOptions &Opts, llvm::Module *Module,
 
   // The PMBuilder only knows about LLVM AA passes.  We should explicitly add
   // the swift AA pass after the other ones.
-  if (!Opts.DisableLLVMARCOpts) {
+  if (RunSwiftSpecificLLVMOptzns) {
     FunctionPasses.add(createSwiftAAWrapperPass());
     FunctionPasses.add(createExternalAAWrapperPass([](Pass &P, Function &,
                                                       AAResults &AAR) {
@@ -253,7 +257,7 @@ void swift::performLLVMOptimizations(IRGenOptions &Opts, llvm::Module *Module,
 
   // The PMBuilder only knows about LLVM AA passes.  We should explicitly add
   // the swift AA pass after the other ones.
-  if (!Opts.DisableLLVMARCOpts) {
+  if (RunSwiftSpecificLLVMOptzns) {
     ModulePasses.add(createSwiftAAWrapperPass());
     ModulePasses.add(createExternalAAWrapperPass([](Pass &P, Function &,
                                                     AAResults &AAR) {
@@ -793,10 +797,6 @@ static std::unique_ptr<llvm::Module> performIRGeneration(IRGenOptions &Opts,
       IGM.addLinkLibrary(linkLib);
     });
 
-    // Hack to handle thunks eagerly synthesized by the Clang importer.
-    for (const auto &linkLib : collectLinkLibrariesFromExternals(Ctx))
-      IGM.addLinkLibrary(linkLib);
-
     if (!IGM.finalize())
       return nullptr;
 
@@ -966,10 +966,6 @@ static void performParallelIRGeneration(
                   PrimaryGM->addLinkLibrary(linkLib);
                 });
   
-  // Hack to handle thunks eagerly synthesized by the Clang importer.
-  for (const auto &linkLib : collectLinkLibrariesFromExternals(Ctx))
-    PrimaryGM->addLinkLibrary(linkLib);
-
   llvm::StringSet<> referencedGlobals;
 
   for (auto it = irgen.begin(); it != irgen.end(); ++it) {
@@ -1149,21 +1145,4 @@ bool swift::performLLVM(IRGenOptions &Opts, ASTContext &Ctx,
                     OutputFilename, Stats))
     return true;
   return false;
-}
-
-SmallVector<LinkLibrary, 4> irgen::collectLinkLibrariesFromExternals(
-                                                           ASTContext &ctx) {
-  SmallVector<LinkLibrary, 4> result;
-  auto addLinkLibrary = [&](LinkLibrary linkLib) {
-    result.push_back(linkLib);
-  };
-
-  llvm::SmallPtrSet<ModuleDecl *, 8> known;
-  for (auto external : ctx.ExternalDefinitions) {
-    swift::ModuleDecl *module = external->getModuleContext();
-    if (known.insert(module).second)
-      module->collectLinkLibraries(addLinkLibrary);
-  }
-
-  return result;
 }

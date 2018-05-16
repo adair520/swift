@@ -164,4 +164,56 @@
     "RightComment": "SimpleAttribute",
     "ModuleName": "Cities"
   },
+  {
+    "DiffItemKind": "CommonDiffItem",
+    "NodeKind": "Var",
+    "NodeAnnotation": "DictionaryKeyUpdate",
+    "ChildIndex": "0",
+    "LeftUsr": "s:6Cities9ContainerC8attrDicts10DictionaryVySSypGvp",
+    "LeftComment": "",
+    "RightUsr": "",
+    "RightComment": "SimpleAttribute",
+    "ModuleName": "Cities"
+  },
+    {
+    "DiffItemKind": "CommonDiffItem",
+    "NodeKind": "Var",
+    "NodeAnnotation": "ArrayMemberUpdate",
+    "ChildIndex": "0",
+    "LeftUsr": "s:6Cities9ContainerC7attrArrSaySSGvp",
+    "LeftComment": "",
+    "RightUsr": "",
+    "RightComment": "SimpleAttribute",
+    "ModuleName": "Cities"
+  },
+  {
+    "DiffItemKind": "CommonDiffItem",
+    "NodeKind": "Var",
+    "NodeAnnotation": "OptionalDictionaryKeyUpdate",
+    "ChildIndex": "0",
+    "LeftUsr": "s:6Cities9ContainerC16optionalAttrDicts10DictionaryVySSypGSgvp",
+    "LeftComment": "",
+    "RightUsr": "",
+    "RightComment": "SimpleAttribute",
+    "ModuleName": "Cities"
+  },
+  {
+    "DiffItemKind": "CommonDiffItem",
+    "NodeKind": "Var",
+    "NodeAnnotation": "SimpleStringRepresentableUpdate",
+    "ChildIndex": "0",
+    "LeftUsr": "s:6Cities15GlobalAttributeSSvp",
+    "LeftComment": "",
+    "RightUsr": "",
+    "RightComment": "NewAttribute",
+    "ModuleName": "Cities"
+  },
+  {
+    "DiffItemKind": "TypeMemberDiffItem",
+    "Usr": "s:6Cities15GlobalAttributeSSvp",
+    "OldPrintedName": "GlobalAttribute",
+    "OldTypeName": "",
+    "NewPrintedName": "NewAttribute",
+    "NewTypeName": "AttributeWrapper"
+  },
 ]

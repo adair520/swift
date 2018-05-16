@@ -27,6 +27,7 @@
 #include "swift/AST/Module.h"
 #include "swift/AST/NameLookup.h"
 #include "swift/AST/Types.h"
+#include "swift/Basic/Defer.h"
 #include "swift/Basic/Platform.h"
 #include "swift/Basic/Range.h"
 #include "swift/Basic/StringExtras.h"
@@ -463,6 +464,19 @@ getNormalInvocationArguments(std::vector<std::string> &invocationArgStrs,
     if (!triple.isOSDarwin())
       invocationArgStrs.insert(invocationArgStrs.end(),
                                {"-fobjc-runtime=ios-7.0"});
+
+    // Define macros that Swift bridging headers use.
+    invocationArgStrs.insert(invocationArgStrs.end(), {
+          "-DSWIFT_CLASS_EXTRA=__attribute__((__annotate__("
+          "\"" SWIFT_NATIVE_ANNOTATION_STRING "\")))",
+          "-DSWIFT_PROTOCOL_EXTRA=__attribute__((__annotate__("
+          "\"" SWIFT_NATIVE_ANNOTATION_STRING "\")))",
+          "-DSWIFT_EXTENSION_EXTRA=__attribute__((__annotate__("
+          "\"" SWIFT_NATIVE_ANNOTATION_STRING "\")))",
+          "-DSWIFT_ENUM_EXTRA=__attribute__((__annotate__("
+          "\"" SWIFT_NATIVE_ANNOTATION_STRING "\")))",
+      });
+
   } else {
     invocationArgStrs.insert(invocationArgStrs.end(), {"-x", "c", "-std=gnu11"});
   }
@@ -470,16 +484,6 @@ getNormalInvocationArguments(std::vector<std::string> &invocationArgStrs,
   // Set C language options.
   if (triple.isOSDarwin()) {
     invocationArgStrs.insert(invocationArgStrs.end(), {
-      // Define macros that Swift bridging headers use.
-      "-DSWIFT_CLASS_EXTRA=__attribute__((annotate(\""
-        SWIFT_NATIVE_ANNOTATION_STRING "\")))",
-      "-DSWIFT_PROTOCOL_EXTRA=__attribute__((annotate(\""
-        SWIFT_NATIVE_ANNOTATION_STRING "\")))",
-      "-DSWIFT_EXTENSION_EXTRA=__attribute__((annotate(\""
-        SWIFT_NATIVE_ANNOTATION_STRING "\")))",
-      "-DSWIFT_ENUM_EXTRA=__attribute__((annotate(\""
-        SWIFT_NATIVE_ANNOTATION_STRING "\")))",
-
       // Avoid including the iso646.h header because some headers from OS X
       // frameworks are broken by it.
       "-D_ISO646_H_", "-D__ISO646_H",
@@ -608,12 +612,6 @@ getNormalInvocationArguments(std::vector<std::string> &invocationArgStrs,
 
   // Enable API notes alongside headers/in frameworks.
   invocationArgStrs.push_back("-fapinotes-modules");
-
-  // Add API notes paths.
-  for (const auto &searchPath : searchPathOpts.ImportSearchPaths) {
-    invocationArgStrs.push_back("-iapinotes-modules");
-    invocationArgStrs.push_back(searchPath);
-  }
   invocationArgStrs.push_back("-iapinotes-modules");
   invocationArgStrs.push_back(searchPathOpts.RuntimeLibraryImportPath);
   invocationArgStrs.push_back("-fapinotes-swift-version=" +
@@ -715,16 +713,32 @@ bool ClangImporter::canReadPCH(StringRef PCHFilename) {
   CompilerInstance &CI = *Impl.Instance;
   auto clangDiags = CompilerInstance::createDiagnostics(
                                               new clang::DiagnosticOptions());
+
+  // Note: Reusing the file manager is safe; this is a component that's already
+  // reused when building PCM files for the module cache.
   clang::SourceManager clangSrcMgr(*clangDiags, CI.getFileManager());
   auto FID = clangSrcMgr.createFileID(
                         llvm::make_unique<ZeroFilledMemoryBuffer>(1, "<main>"));
   clangSrcMgr.setMainFileID(FID);
+
+  // Note: Reusing the real HeaderSearch is dangerous, but it's not easy to
+  // copy. We put in some effort to reset it to the way it was below.
+  clang::HeaderSearch &headerSearchInfo =
+      CI.getPreprocessor().getHeaderSearchInfo();
+  assert(headerSearchInfo.getExternalLookup() == nullptr &&
+         "already configured an ASTReader");
+
+  // Note: Reusing the PCM cache is safe because that's already shared when
+  // building PCM files for the module cache. Using the top-level compiler
+  // instance as a module loader does seem a little dangerous but does not
+  // appear to cause problems at the moment.
   clang::Preprocessor PP(CI.getInvocation().getPreprocessorOptsPtr(),
                          *clangDiags,
                          CI.getLangOpts(),
                          clangSrcMgr,
                          CI.getPCMCache(),
-                         CI.getPreprocessor().getHeaderSearchInfo(), CI,
+                         headerSearchInfo,
+                         (clang::ModuleLoader &)CI,
                          /*IILookup=*/nullptr,
                          /*OwnsHeaderSearch=*/false);
   PP.Initialize(CI.getTarget());
@@ -732,6 +746,8 @@ bool ClangImporter::canReadPCH(StringRef PCHFilename) {
                         PP.getIdentifierTable(), PP.getSelectorTable(),
                         PP.getBuiltinInfo());
 
+  // Note: Reusing the PCHContainerReader or ModuleFileExtensions could be
+  // dangerous.
   std::unique_ptr<clang::ASTReader> Reader(new clang::ASTReader(
       PP, &ctx, CI.getPCHContainerReader(),
       CI.getFrontendOpts().ModuleFileExtensions,
@@ -740,6 +756,12 @@ bool ClangImporter::canReadPCH(StringRef PCHFilename) {
       /*AllowPCHWithCompilerErrors*/ false,
       /*AllowConfigurationMismatch*/ false,
       /*ValidateSystemInputs*/ true));
+  SWIFT_DEFER {
+    assert(headerSearchInfo.getExternalLookup() == Reader.get() ||
+           headerSearchInfo.getExternalLookup() == nullptr);
+    headerSearchInfo.SetExternalLookup(nullptr);
+    headerSearchInfo.SetExternalSource(nullptr);
+  };
   ctx.InitBuiltinTypes(CI.getTarget());
 
   auto result = Reader->ReadAST(PCHFilename,
@@ -1058,6 +1080,7 @@ ClangImporter::create(ASTContext &ctx,
   importer->Impl.ImportedHeaderUnit =
     new (ctx) ClangModuleUnit(*importedHeaderModule, importer->Impl, nullptr);
   importedHeaderModule->addFile(*importer->Impl.ImportedHeaderUnit);
+  importedHeaderModule->setHasResolvedImports();
 
   importer->Impl.IsReadingBridgingPCH = false;
 
@@ -1561,6 +1584,7 @@ ModuleDecl *ClangImporter::Implementation::finishLoadingClangModule(
     result = ModuleDecl::create(name, SwiftContext);
     // Silence error messages about testably importing a Clang module.
     result->setTestingEnabled();
+    result->setHasResolvedImports();
 
     wrapperUnit =
       new (SwiftContext) ClangModuleUnit(*result, *this, clangModule);
@@ -1703,6 +1727,7 @@ ClangModuleUnit *ClangImporter::Implementation::getWrapperForModule(
   auto wrapper = ModuleDecl::create(name, SwiftContext);
   // Silence error messages about testably importing a Clang module.
   wrapper->setTestingEnabled();
+  wrapper->setHasResolvedImports();
 
   auto file = new (SwiftContext) ClangModuleUnit(*wrapper, *this,
                                                  underlying);
@@ -3014,43 +3039,70 @@ ModuleDecl *ClangModuleUnit::getAdapterModule() const {
 void ClangModuleUnit::getImportedModules(
     SmallVectorImpl<ModuleDecl::ImportedModule> &imports,
     ModuleDecl::ImportFilter filter) const {
-  if (filter != ModuleDecl::ImportFilter::Public)
+  switch (filter) {
+  case ModuleDecl::ImportFilter::All:
+  case ModuleDecl::ImportFilter::Private:
     imports.push_back({ModuleDecl::AccessPathTy(), owner.getStdlibModule()});
+    break;
+  case ModuleDecl::ImportFilter::Public:
+    break;
+  }
 
   SmallVector<clang::Module *, 8> imported;
   if (!clangModule) {
     // This is the special "imported headers" module.
-    if (filter != ModuleDecl::ImportFilter::Private) {
+    switch (filter) {
+    case ModuleDecl::ImportFilter::All:
+    case ModuleDecl::ImportFilter::Public:
       imported.append(owner.ImportedHeaderExports.begin(),
                       owner.ImportedHeaderExports.end());
+      break;
+
+    case ModuleDecl::ImportFilter::Private:
+      break;
     }
 
   } else {
     clangModule->getExportedModules(imported);
-    if (filter != ModuleDecl::ImportFilter::Public) {
-      if (filter == ModuleDecl::ImportFilter::All) {
-        llvm::SmallPtrSet<clang::Module *, 8> knownModules;
-        imported.append(clangModule->Imports.begin(), clangModule->Imports.end());
-        imported.erase(std::remove_if(imported.begin(), imported.end(),
-                                      [&](clang::Module *mod) -> bool {
-                                        return !knownModules.insert(mod).second;
-                                      }),
-                       imported.end());
-      } else {
-        llvm::SmallPtrSet<clang::Module *, 8> knownModules(imported.begin(),
-                                                           imported.end());
-        SmallVector<clang::Module *, 8> privateImports;
-        std::copy_if(clangModule->Imports.begin(), clangModule->Imports.end(),
-                     std::back_inserter(privateImports), [&](clang::Module *mod) {
-                       return knownModules.count(mod) == 0;
-        });
-        imported.swap(privateImports);
-      }
+
+    switch (filter) {
+    case ModuleDecl::ImportFilter::All: {
+      llvm::SmallPtrSet<clang::Module *, 8> knownModules;
+      imported.append(clangModule->Imports.begin(), clangModule->Imports.end());
+      imported.erase(std::remove_if(imported.begin(), imported.end(),
+                                    [&](clang::Module *mod) -> bool {
+                                      return !knownModules.insert(mod).second;
+                                    }),
+                     imported.end());
 
       // FIXME: The parent module isn't exactly a private import, but it is
       // needed for link dependencies.
       if (clangModule->Parent)
         imported.push_back(clangModule->Parent);
+
+      break;
+    }
+
+    case ModuleDecl::ImportFilter::Private: {
+      llvm::SmallPtrSet<clang::Module *, 8> knownModules(imported.begin(),
+                                                         imported.end());
+      SmallVector<clang::Module *, 8> privateImports;
+      std::copy_if(clangModule->Imports.begin(), clangModule->Imports.end(),
+                   std::back_inserter(privateImports), [&](clang::Module *mod) {
+                     return knownModules.count(mod) == 0;
+                   });
+      imported.swap(privateImports);
+
+      // FIXME: The parent module isn't exactly a private import, but it is
+      // needed for link dependencies.
+      if (clangModule->Parent)
+        imported.push_back(clangModule->Parent);
+
+      break;
+    }
+
+    case ModuleDecl::ImportFilter::Public:
+      break;
     }
   }
 

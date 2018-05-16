@@ -367,7 +367,7 @@ protected:
     DefaultArgumentResilienceExpansion : 1
   );
   
-  SWIFT_INLINE_BITFIELD(AbstractFunctionDecl, ValueDecl, 3+8+5+1+1+1+1+1,
+  SWIFT_INLINE_BITFIELD(AbstractFunctionDecl, ValueDecl, 3+8+5+1+1+1+1+1+1,
     /// \see AbstractFunctionDecl::BodyKind
     BodyKind : 3,
 
@@ -390,7 +390,11 @@ protected:
     HasComputedNeedsNewVTableEntry : 1,
 
     /// The ResilienceExpansion to use for default arguments.
-    DefaultArgumentResilienceExpansion : 1
+    DefaultArgumentResilienceExpansion : 1,
+
+    /// Whether this member was synthesized as part of a derived
+    /// protocol conformance.
+    Synthesized : 1
   );
 
   SWIFT_INLINE_BITFIELD(FuncDecl, AbstractFunctionDecl, 1+2+1+1+2,
@@ -2146,6 +2150,7 @@ class ValueDecl : public Decl {
   DeclName Name;
   SourceLoc NameLoc;
   llvm::PointerIntPair<Type, 3, OptionalEnum<AccessLevel>> TypeAndAccess;
+  unsigned LocalDiscriminator = 0;
 
 private:
     bool isUsableFromInline() const;
@@ -2170,11 +2175,6 @@ protected:
   }
 
 public:
-  /// \brief Return true if this is a definition of a decl, not a forward
-  /// declaration (e.g. of a function) that is implemented outside of the
-  /// swift code.
-  bool isDefinition() const;
-
   /// \brief Return true if this protocol member is a protocol requirement.
   ///
   /// Asserts if this is not a member of a protocol.
@@ -2373,10 +2373,6 @@ public:
   /// isInstanceMember - Determine whether this value is an instance member
   /// of an enum or protocol.
   bool isInstanceMember() const;
-
-  /// needsCapture - Check whether referring to this decl from a nested
-  /// function requires capturing it.
-  bool needsCapture() const;
 
   /// Retrieve the context discriminator for this local value, which
   /// is the index of this declaration in the sequence of
@@ -5105,6 +5101,7 @@ protected:
     Bits.AbstractFunctionDecl.HasComputedNeedsNewVTableEntry = false;
     Bits.AbstractFunctionDecl.DefaultArgumentResilienceExpansion =
         unsigned(ResilienceExpansion::Maximal);
+    Bits.AbstractFunctionDecl.Synthesized = false;
 
     // Verify no bitfield truncation.
     assert(Bits.AbstractFunctionDecl.NumParameterLists == NumParameterLists);
@@ -5251,6 +5248,14 @@ public:
     if (!Bits.AbstractFunctionDecl.HasComputedNeedsNewVTableEntry)
       const_cast<AbstractFunctionDecl *>(this)->computeNeedsNewVTableEntry();
     return Bits.AbstractFunctionDecl.NeedsNewVTableEntry;
+  }
+
+  bool isSynthesized() const {
+    return Bits.AbstractFunctionDecl.Synthesized;
+  }
+
+  void setSynthesized(bool value = true) {
+    Bits.AbstractFunctionDecl.Synthesized = value;
   }
 
 private:
@@ -6703,7 +6708,8 @@ inline bool ValueDecl::isImportAsMember() const {
 inline bool Decl::isPotentiallyOverridable() const {
   if (isa<VarDecl>(this) ||
       isa<SubscriptDecl>(this) ||
-      isa<FuncDecl>(this)) {
+      isa<FuncDecl>(this) ||
+      isa<DestructorDecl>(this)) {
     return getDeclContext()->getAsClassOrClassExtensionContext();
   } else {
     return false;

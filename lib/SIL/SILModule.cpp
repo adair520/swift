@@ -14,7 +14,6 @@
 #include "swift/Serialization/SerializedSILLoader.h"
 #include "swift/AST/GenericEnvironment.h"
 #include "swift/AST/ProtocolConformance.h"
-#include "swift/AST/Substitution.h"
 #include "swift/SIL/FormalLinkage.h"
 #include "swift/SIL/SILDebugScope.h"
 #include "swift/SIL/SILModule.h"
@@ -111,6 +110,17 @@ SILModule::~SILModule() {
   // at all.
   for (SILFunction &F : *this)
     F.dropAllReferences();
+}
+
+std::unique_ptr<SILModule>
+SILModule::createEmptyModule(ModuleDecl *M, SILOptions &Options,
+                             bool WholeModule) {
+  return std::unique_ptr<SILModule>(
+      new SILModule(M, Options, M, WholeModule));
+}
+
+ASTContext &SILModule::getASTContext() const {
+  return TheSwiftModule->getASTContext();
 }
 
 void *SILModule::allocate(unsigned Size, unsigned Align) const {

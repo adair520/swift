@@ -214,6 +214,11 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
   Opts.NamedLazyMemberLoading &= !Args.hasArg(OPT_disable_named_lazy_member_loading);
   Opts.DebugGenericSignatures |= Args.hasArg(OPT_debug_generic_signatures);
 
+  if (Args.hasArg(OPT_verify_syntax_tree)) {
+    Opts.BuildSyntaxTree = true;
+    Opts.VerifySyntaxTree = true;
+  }
+
   Opts.DebuggerSupport |= Args.hasArg(OPT_debugger_support);
   if (Opts.DebuggerSupport)
     Opts.EnableDollarIdentifiers = true;
@@ -304,6 +309,9 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
     }
   }
 
+  Opts.EmitPublicTypeMetadataAccessors =
+    Args.hasArg(OPT_emit_public_type_metadata_accessors);
+
   Opts.EnableNSKeyedArchiverDiagnostics =
       Args.hasFlag(OPT_enable_nskeyedarchiver_diagnostics,
                    OPT_disable_nskeyedarchiver_diagnostics,
@@ -312,7 +320,7 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
   Opts.EnableNonFrozenEnumExhaustivityDiagnostics =
     Args.hasFlag(OPT_enable_nonfrozen_enum_exhaustivity_diagnostics,
                  OPT_disable_nonfrozen_enum_exhaustivity_diagnostics,
-                 Opts.EnableNonFrozenEnumExhaustivityDiagnostics);
+                 Opts.isSwiftVersionAtLeast(5));
 
   if (Arg *A = Args.getLastArg(OPT_Rpass_EQ))
     Opts.OptimizationRemarkPassedPattern =
@@ -804,7 +812,8 @@ static bool ParseIRGenArgs(IRGenOptions &Opts, ArgList &Args,
   }
 
   Opts.DisableLLVMOptzns |= Args.hasArg(OPT_disable_llvm_optzns);
-  Opts.DisableLLVMARCOpts |= Args.hasArg(OPT_disable_llvm_arc_opts);
+  Opts.DisableSwiftSpecificLLVMOptzns |=
+      Args.hasArg(OPT_disable_swift_specific_llvm_optzns);
   Opts.DisableLLVMSLPVectorizer |= Args.hasArg(OPT_disable_llvm_slp_vectorizer);
   if (Args.hasArg(OPT_disable_llvm_verify))
     Opts.Verify = false;
@@ -901,6 +910,10 @@ static bool ParseIRGenArgs(IRGenOptions &Opts, ArgList &Args,
 
   if (Args.hasArg(OPT_enable_class_resilience)) {
     Opts.EnableClassResilience = true;
+  }
+
+  if (Args.hasArg(OPT_enable_resilience_bypass)) {
+    Opts.EnableResilienceBypass = true;
   }
 
   for (const auto &Lib : Args.getAllArgValues(options::OPT_autolink_library))
